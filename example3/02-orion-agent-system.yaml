@@ -1,0 +1,159 @@
+apiVersion: orloj.dev/v1
+kind: AgentPolicy
+metadata:
+  name: orion-agent-policy
+  namespace: orloj
+spec:
+  apply_mode: scoped
+  target_agents:
+    - kyc-agent
+    - gst-agent
+    - account-aggregator-agent
+    - overdraft-evaluation-agent
+  target_systems:
+    - orion
+  allowed_models:
+    - gpt-4o-mini
+    - openai-gpt4o-mini
+  blocked_tools: []
+  max_child_depth: 3
+  max_child_tasks: 8
+  max_tokens_per_run: 500000
+---
+apiVersion: orloj.dev/v1
+kind: Agent
+metadata:
+  name: kyc-agent
+  namespace: orloj
+spec:
+  model_ref: openai-gpt4o-mini
+  memory:
+    ref: orion-memory
+    allow:
+      - write
+      - search
+      - read
+  prompt: |
+    You are Orion's KYC Agent and the entry agent for MSME overdraft tasks.
+
+    For a PAN-based request, first call the KYC tool with the PAN and extract kycId,
+    panNumber, businessName, udyamNumber, registrationDate, turnover, and status.
+    Return only a compact JSON handoff containing originalRequest, pan, kycId,
+    businessName, udyamNumber, registrationDate, turnover, and status. The next agents
+    depend on those values. Do not invent IDs.
+
+    Use memory when the user asks you to remember or reuse an applicant. Store concise
+    applicant notes keyed by PAN, and search/read memory before responding to memory
+    reuse requests.
+
+  tools:
+    - msme-mcp--msme-api-kyc-pan-pan
+  allowed_tools:
+    - msme-mcp--msme-api-kyc-pan-pan
+  limits:
+    max_steps: 20
+    timeout: 120s
+---
+apiVersion: orloj.dev/v1
+kind: Agent
+metadata:
+  name: gst-agent
+  namespace: orloj
+spec:
+  model_ref: openai-gpt4o-mini
+  prompt: |
+    You are Orion's GST Agent.
+
+    Use only the GST tool to fetch GST registrations for the PAN received from KYC.
+    Return only a compact JSON handoff containing originalRequest, pan, kycId,
+    gstNumber, registrationStatus, annualTurnover, state, legalName, and tradeName.
+    Prefer an ACTIVE GST registration when more than one is available.
+
+  tools:
+    - msme-mcp--msme-api-gst-pan-pan
+  allowed_tools:
+    - msme-mcp--msme-api-gst-pan-pan
+  limits:
+    max_steps: 16
+    timeout: 120s
+---
+apiVersion: orloj.dev/v1
+kind: Agent
+metadata:
+  name: account-aggregator-agent
+  namespace: orloj
+spec:
+  model_ref: openai-gpt4o-mini
+  prompt: |
+    You are Orion's Account Aggregator Agent.
+
+    Use only the accounts tool to fetch bank accounts for the PAN received from GST.
+    Return only a compact JSON handoff containing originalRequest, pan, kycId,
+    gstNumber, and accountIds.
+
+    Keep the handoff small. Include account ids only; do not include transaction lists,
+    transaction samples, account numbers, narration text, or raw account payloads.
+
+  tools:
+    - msme-mcp--msme-api-accounts-pan-pan
+  allowed_tools:
+    - msme-mcp--msme-api-accounts-pan-pan
+  limits:
+    max_steps: 20
+    timeout: 120s
+---
+apiVersion: orloj.dev/v1
+kind: Agent
+metadata:
+  name: overdraft-evaluation-agent
+  namespace: orloj
+spec:
+  model_ref: openai-gpt4o-mini
+  prompt: |
+    You are Orion's Overdraft Evaluation Agent.
+
+    Use the overdraft eligibility tool as soon as the handoff includes kycId,
+    gstNumber, and accountIds from the upstream agents. Prefer the query-parameter
+    tool msme-mcp--msme-api-overdraft-evaluations and pass:
+      - kycId as the numeric KYC id
+      - gstNumber as the selected active GST number
+      - accountIds as the active account ids from the accounts handoff
+
+    Return eligible, score, maximumEligibleAmount, and reasons exactly from the tool
+    output. Do not do extra analysis after the tool result is available.
+
+  tools:
+    - msme-mcp--msme-api-overdraft-evaluations
+    - msme-mcp--msme-api-overdraft-evaluate
+  allowed_tools:
+    - msme-mcp--msme-api-overdraft-evaluations
+    - msme-mcp--msme-api-overdraft-evaluate
+  limits:
+    max_steps: 24
+    timeout: 180s
+---
+apiVersion: orloj.dev/v1
+kind: AgentSystem
+metadata:
+  name: orion
+  namespace: orloj
+spec:
+  agents:
+    - kyc-agent
+    - gst-agent
+    - account-aggregator-agent
+    - overdraft-evaluation-agent
+  graph:
+    kyc-agent:
+      edges:
+        - to: gst-agent
+    gst-agent:
+      edges:
+        - to: account-aggregator-agent
+    account-aggregator-agent:
+      edges:
+        - to: overdraft-evaluation-agent
+    overdraft-evaluation-agent:
+      edges: []
+  a2a:
+    enabled: true

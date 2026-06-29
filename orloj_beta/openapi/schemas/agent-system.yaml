@@ -1,0 +1,134 @@
+components:
+  schemas:
+    EdgeCondition:
+      type: object
+      description: Predicate evaluated against the completing agent's output to determine whether a graph edge should fire.
+      properties:
+        output_contains:
+          type: string
+          description: Matches if the output contains this string (case-insensitive).
+        output_not_contains:
+          type: string
+          description: Matches if the output does NOT contain this string (case-insensitive).
+        output_matches:
+          type: string
+          description: Matches if the output matches this regex pattern.
+        default:
+          type: boolean
+          description: Marks this edge as the fallback when no conditional edge matches.
+        output_json_path:
+          type: string
+          description: Dot-notation path (e.g. "$.route") to extract a value from JSON output. Requires a comparison operator.
+        equals:
+          type: string
+          description: Matches when the extracted JSON value equals this string.
+        not_equals:
+          type: string
+          description: Matches when the extracted JSON value does NOT equal this string.
+        contains:
+          type: string
+          description: For arrays, matches when any element equals this value. For strings, matches on substring (case-insensitive).
+        greater_than:
+          type: string
+          description: Matches when the extracted numeric JSON value exceeds this threshold.
+        less_than:
+          type: string
+          description: Matches when the extracted numeric JSON value is below this threshold.
+    GraphRoute:
+      type: object
+      properties:
+        to: { type: string }
+        labels: { type: object, additionalProperties: { type: string } }
+        policy: { type: object, additionalProperties: { type: string } }
+        condition: { $ref: "#/components/schemas/EdgeCondition" }
+    GraphJoin:
+      type: object
+      properties:
+        mode: { type: string }
+        quorum_count: { type: integer }
+        quorum_percent: { type: integer }
+        on_failure: { type: string }
+    ReviewCheckpointSpec:
+      type: object
+      properties:
+        checkpoint_id: { type: string }
+        display_name: { type: string }
+        reason: { type: string }
+        ttl: { type: string }
+        allow_request_changes: { type: boolean, default: true }
+        max_review_cycles: { type: integer, minimum: 1, default: 3 }
+    AgentSystemA2ASpec:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          description: Expose this AgentSystem through inbound A2A discovery and JSON-RPC invocation.
+        auth:
+          type: string
+          enum: [public, bearer]
+          default: bearer
+          description: >-
+            Controls whether A2A invoke requires authentication for this system.
+            "public" allows unauthenticated invoke; "bearer" (default) requires
+            a valid API token when instance-wide auth is enabled.
+    GraphEdge:
+      type: object
+      properties:
+        next: { type: string }
+        edges:
+          type: array
+          items: { $ref: "#/components/schemas/GraphRoute" }
+        join: { $ref: "#/components/schemas/GraphJoin" }
+        delegates:
+          type: array
+          description: Agents dispatched after the node's first execution. Reports flow back and trigger a review re-execution before edges fire.
+          items: { $ref: "#/components/schemas/GraphRoute" }
+        delegate_join:
+          description: Controls how delegate returns are collected before the review phase.
+          $ref: "#/components/schemas/GraphJoin"
+        review:
+          description: Optional human review checkpoint for this node's output before downstream routing continues.
+          $ref: "#/components/schemas/ReviewCheckpointSpec"
+    AgentSystemSpec:
+      type: object
+      properties:
+        context_adapter:
+          type: string
+          description: >
+            Optional ContextAdapter resource name. When set, raw task input is passed through the
+            referenced adapter (Tool-backed sanitization) before the first agent in execution order runs.
+        agents:
+          type: array
+          items: { type: string }
+        graph:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/GraphEdge" }
+        completion_review:
+          description: Optional final human review checkpoint before the task transitions to Succeeded.
+          $ref: "#/components/schemas/ReviewCheckpointSpec"
+        a2a:
+          $ref: "#/components/schemas/AgentSystemA2ASpec"
+    AgentSystemStatus:
+      type: object
+      properties:
+        phase: { type: string }
+        lastError: { type: string }
+        observedGeneration: { type: integer, format: int64 }
+    AgentSystem:
+      type: object
+      required: [apiVersion, kind, metadata, spec]
+      properties:
+        apiVersion: { type: string, enum: [orloj.dev/v1] }
+        kind: { type: string, enum: [AgentSystem] }
+        metadata: { $ref: "common.yaml#/components/schemas/ObjectMeta" }
+        spec: { $ref: "#/components/schemas/AgentSystemSpec" }
+        status: { $ref: "#/components/schemas/AgentSystemStatus" }
+    AgentSystemList:
+      allOf:
+        - { $ref: "common.yaml#/components/schemas/ListMeta" }
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/AgentSystem" }

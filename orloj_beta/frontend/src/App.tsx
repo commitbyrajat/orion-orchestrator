@@ -1,0 +1,298 @@
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState, useEffect, useCallback } from "react";
+import { useAppStore } from "./store";
+import { useWatchInvalidation } from "./api/watch";
+import {
+  getAuthConfig,
+  getAuthMe,
+  isNativeAuthMode,
+  type AuthConfigResponse,
+  type AuthMeResponse,
+} from "./api/client";
+import { Sidebar } from "./components/Sidebar";
+import { TopBar } from "./components/TopBar";
+import { ToastContainer } from "./components/Toast";
+import { SearchDialog } from "./components/SearchDialog";
+import { Dashboard } from "./pages/Dashboard";
+import { AgentSystems } from "./pages/AgentSystems";
+import { AgentSystemDetail } from "./pages/AgentSystemDetail";
+import { Agents } from "./pages/Agents";
+import { AgentDetail } from "./pages/AgentDetail";
+import { Tasks } from "./pages/Tasks";
+import { TaskDetail } from "./pages/TaskDetail";
+import { TaskSchedules } from "./pages/TaskSchedules";
+import { TaskScheduleDetail } from "./pages/TaskScheduleDetail";
+import { TaskWebhooks } from "./pages/TaskWebhooks";
+import { TaskWebhookDetail } from "./pages/TaskWebhookDetail";
+import { Workers } from "./pages/Workers";
+import { WorkerDetail } from "./pages/WorkerDetail";
+import { ModelEndpoints } from "./pages/ModelEndpoints";
+import { ModelEndpointDetail } from "./pages/ModelEndpointDetail";
+import { Tools } from "./pages/Tools";
+import { ToolDetail } from "./pages/ToolDetail";
+import { Memories } from "./pages/Memories";
+import { MemoryDetail } from "./pages/MemoryDetail";
+import { ContextAdapters } from "./pages/ContextAdapters";
+import { ContextAdapterDetail } from "./pages/ContextAdapterDetail";
+import { Secrets } from "./pages/Secrets";
+import { SecretDetail } from "./pages/SecretDetail";
+import { Policies } from "./pages/Policies";
+import { AgentPolicyDetail } from "./pages/AgentPolicyDetail";
+import { Roles } from "./pages/Roles";
+import { AgentRoleDetail } from "./pages/AgentRoleDetail";
+import { Permissions } from "./pages/Permissions";
+import { ToolPermissionDetail } from "./pages/ToolPermissionDetail";
+import { ToolApprovals } from "./pages/ToolApprovals";
+import { ToolApprovalDetail } from "./pages/ToolApprovalDetail";
+import { TaskApprovalDetail } from "./pages/TaskApprovalDetail";
+import { McpServers } from "./pages/McpServers";
+import { McpServerDetail } from "./pages/McpServerDetail";
+import { EvalDatasets } from "./pages/EvalDatasets";
+import { EvalDatasetDetail } from "./pages/EvalDatasetDetail";
+import { EvalRuns } from "./pages/EvalRuns";
+import { EvalRunDetail } from "./pages/EvalRunDetail";
+import { A2ARegistry } from "./pages/A2ARegistry";
+import { Capabilities } from "./pages/Capabilities";
+import { NotFound } from "./pages/NotFound";
+import { Login } from "./pages/Login";
+import { Setup } from "./pages/Setup";
+import { AccountPage } from "./pages/Account";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import clsx from "clsx";
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 5000,
+    },
+  },
+});
+
+function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const theme = useAppStore((s) => s.theme);
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+  return <>{children}</>;
+}
+
+function WatchProvider({ children }: { children: React.ReactNode }) {
+  useWatchInvalidation();
+  return <>{children}</>;
+}
+
+interface AuthBootstrapState {
+  loading: boolean;
+  config: AuthConfigResponse | null;
+  authenticated: boolean;
+  me: AuthMeResponse | null;
+}
+
+interface AppLayoutProps {
+  onAuthStateChanged: () => void;
+  nativeAuthEnabled: boolean;
+  username?: string;
+  authMode: string;
+  authMethod?: string;
+}
+
+function AppLayout({
+  onAuthStateChanged,
+  nativeAuthEnabled,
+  username,
+  authMode,
+  authMethod,
+}: AppLayoutProps) {
+  const collapsed = useAppStore((s) => s.sidebarCollapsed);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      e.preventDefault();
+      setSearchOpen(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [handleKeyDown]);
+
+  return (
+    <div className={clsx("app-layout", collapsed && "app-layout--collapsed")}>
+      <a href="#main-content" className="skip-link">Skip to main content</a>
+      <Sidebar nativeAuthEnabled={nativeAuthEnabled} username={username} />
+      <div className="app-layout__main">
+        <TopBar
+          onAuthStateChanged={onAuthStateChanged}
+          nativeAuthEnabled={nativeAuthEnabled}
+          username={username}
+          onSearchOpen={() => setSearchOpen(true)}
+        />
+        <main id="main-content" className="app-layout__content" role="main">
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/setup" element={<Navigate to="/" replace />} />
+              <Route path="/login" element={<Navigate to="/" replace />} />
+              <Route
+                path="/account"
+                element={
+                  nativeAuthEnabled ? (
+                    <AccountPage
+                      authMode={authMode}
+                      authMethod={authMethod}
+                      username={username}
+                      onAuthStateChanged={onAuthStateChanged}
+                    />
+                  ) : (
+                    <Navigate to="/" replace />
+                  )
+                }
+              />
+              <Route path="/systems" element={<AgentSystems />} />
+              <Route path="/systems/:name" element={<AgentSystemDetail />} />
+              <Route path="/agents" element={<Agents />} />
+              <Route path="/agents/:name" element={<AgentDetail />} />
+              <Route path="/tasks" element={<Tasks />} />
+              <Route path="/tasks/:name" element={<TaskDetail />} />
+              <Route path="/task-schedules" element={<TaskSchedules />} />
+              <Route path="/task-schedules/:name" element={<TaskScheduleDetail />} />
+              <Route path="/task-webhooks" element={<TaskWebhooks />} />
+              <Route path="/task-webhooks/:name" element={<TaskWebhookDetail />} />
+              <Route path="/workers" element={<Workers />} />
+              <Route path="/workers/:name" element={<WorkerDetail />} />
+              <Route path="/models" element={<ModelEndpoints />} />
+              <Route path="/models/:name" element={<ModelEndpointDetail />} />
+              <Route path="/tools" element={<Tools />} />
+              <Route path="/tools/:name" element={<ToolDetail />} />
+              <Route path="/mcp-servers" element={<McpServers />} />
+              <Route path="/mcp-servers/:name" element={<McpServerDetail />} />
+              <Route path="/eval-datasets" element={<EvalDatasets />} />
+              <Route path="/eval-datasets/:name" element={<EvalDatasetDetail />} />
+              <Route path="/eval-runs" element={<EvalRuns />} />
+              <Route path="/eval-runs/:name" element={<EvalRunDetail />} />
+              <Route path="/a2a" element={<A2ARegistry />} />
+              <Route path="/capabilities" element={<Capabilities />} />
+              <Route path="/memories" element={<Memories />} />
+              <Route path="/memories/:name" element={<MemoryDetail />} />
+              <Route path="/context-adapters" element={<ContextAdapters />} />
+              <Route path="/context-adapters/:name" element={<ContextAdapterDetail />} />
+              <Route path="/secrets" element={<Secrets />} />
+              <Route path="/secrets/:name" element={<SecretDetail />} />
+              <Route path="/sealed-secrets" element={<Navigate to="/secrets" replace />} />
+              <Route path="/sealed-secrets/:name" element={<Navigate to="/secrets" replace />} />
+              <Route path="/policies" element={<Policies />} />
+              <Route path="/policies/:name" element={<AgentPolicyDetail />} />
+              <Route path="/roles" element={<Roles />} />
+              <Route path="/roles/:name" element={<AgentRoleDetail />} />
+              <Route path="/permissions" element={<Permissions />} />
+              <Route path="/permissions/:name" element={<ToolPermissionDetail />} />
+              <Route path="/approvals" element={<ToolApprovals />} />
+              <Route path="/approvals/:name" element={<ToolApprovalDetail />} />
+              <Route path="/approvals/task/:name" element={<TaskApprovalDetail />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </ErrorBoundary>
+        </main>
+      </div>
+      <ToastContainer />
+      <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
+    </div>
+  );
+}
+
+export function App() {
+  const [refreshAuthNonce, setRefreshAuthNonce] = useState(0);
+  const [auth, setAuth] = useState<AuthBootstrapState>({
+    loading: true,
+    config: null,
+    authenticated: false,
+    me: null,
+  });
+
+  const refreshAuth = useCallback(() => {
+    setRefreshAuthNonce((n) => n + 1);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const config = await getAuthConfig();
+        let authenticated = true;
+        let me: AuthMeResponse | null = null;
+        if (isNativeAuthMode(config.mode) && !config.setup_required) {
+          me = await getAuthMe();
+          authenticated = me.authenticated === true;
+        }
+        if (!cancelled) {
+          setAuth({ loading: false, config, authenticated, me });
+        }
+      } catch {
+        if (!cancelled) {
+          setAuth({
+            loading: false,
+            config: {
+              mode: "off",
+              setup_required: false,
+              setup_token_required: false,
+              login_methods: [],
+            },
+            authenticated: true,
+            me: null,
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshAuthNonce]);
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <BrowserRouter basename={import.meta.env.DEV ? "" : ((window as any).__ORLOJ_UI_BASE ?? "/").replace(/\/+$/, "")}>
+          {auth.loading ? (
+            <div className="page">
+              <div className="page__header">
+                <h1 className="page__title">Loading</h1>
+              </div>
+            </div>
+          ) : isNativeAuthMode(auth.config?.mode) && auth.config?.setup_required ? (
+            <Routes>
+              <Route
+                path="/setup"
+                element={
+                  <Setup
+                    onSuccess={refreshAuth}
+                    setupTokenRequired={auth.config?.setup_token_required === true}
+                  />
+                }
+              />
+              <Route path="*" element={<Navigate to="/setup" replace />} />
+            </Routes>
+          ) : isNativeAuthMode(auth.config?.mode) && !auth.authenticated ? (
+            <Routes>
+              <Route path="/login" element={<Login onSuccess={refreshAuth} />} />
+              <Route path="*" element={<Navigate to="/login" replace />} />
+            </Routes>
+          ) : (
+            <WatchProvider>
+              <AppLayout
+                onAuthStateChanged={refreshAuth}
+                nativeAuthEnabled={isNativeAuthMode(auth.config?.mode)}
+                username={auth.me?.username}
+                authMode={auth.config?.mode ?? "off"}
+                authMethod={auth.me?.method}
+              />
+            </WatchProvider>
+          )}
+        </BrowserRouter>
+      </ThemeProvider>
+    </QueryClientProvider>
+  );
+}

@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: petstore-api-proxy
+  namespace: orloj
+data:
+  nginx.conf: |
+    events {}
+    http {
+      server {
+        listen 8080;
+
+        location / {
+          proxy_ssl_server_name on;
+          proxy_set_header Host petstore.swagger.io;
+          proxy_set_header Content-Type application/json;
+          rewrite ^/pet$ /v2/pet break;
+          rewrite ^/v2/pet/findbystatus$ /v2/pet/findByStatus break;
+          rewrite ^/pet/findbystatus$ /v2/pet/findByStatus break;
+          proxy_pass https://petstore.swagger.io;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: petstore-api-proxy
+  namespace: orloj
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: petstore-api-proxy
+  template:
+    metadata:
+      labels:
+        app: petstore-api-proxy
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.29-alpine
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+      volumes:
+        - name: config
+          configMap:
+            name: petstore-api-proxy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: petstore-api-proxy
+  namespace: orloj
+spec:
+  type: ClusterIP
+  selector:
+    app: petstore-api-proxy
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: petstore-openapi-to-mcp
+  namespace: orloj
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: petstore-openapi-to-mcp
+  template:
+    metadata:
+      labels:
+        app: petstore-openapi-to-mcp
+    spec:
+      containers:
+        - name: openapi-to-mcp
+          image: evilfreelancer/openapi-to-mcp:latest
+          ports:
+            - containerPort: 3100
+          env:
+            - name: MCP_SERVER_NAME
+              value: petstore-mcp
+            - name: MCP_PORT
+              value: "3100"
+            - name: MCP_HOST
+              value: "0.0.0.0"
+            - name: MCP_OPENAPI_SPEC
+              value: "https://petstore.swagger.io/v2/swagger.json"
+            - name: MCP_API_BASE_URL
+              value: "http://petstore-api-proxy.orloj.svc.cluster.local:8080/v2"
+            - name: MCP_TOOL_PREFIX
+              value: "petstore_"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: petstore-openapi-to-mcp
+  namespace: orloj
+spec:
+  type: ClusterIP
+  selector:
+    app: petstore-openapi-to-mcp
+  ports:
+    - name: http
+      port: 3100
+      targetPort: 3100
+---
+apiVersion: orloj.dev/v1
+kind: Secret
+metadata:
+  name: openai-api-key
+  namespace: orloj
+spec:
+  data:
+    api-key: "c2stcHJvai00Z2VQN1ZudEZWZjdPeUNRNDhuNUttUHExemVVNXZzMVFyNEdNbjNNVW1LZDV0Vzlhak96aWFma3drVWZzRHRreGJhUVB2YXhHV1QzQmxia0ZKem5LaGRrOS1CX3JUbVNWb2Jxcl8xTzFSeGhnR1pScnpJMXhESXZpSHhtODRzd1NvVEJxQ1dJM1h4YmNsVE9YZXJ5ZldRd3I2OEEK"
+---
+apiVersion: orloj.dev/v1
+kind: ModelEndpoint
+metadata:
+  name: openai-gpt4o-mini
+  namespace: orloj
+spec:
+  provider: openai
+  base_url: "https://api.openai.com/v1"
+  default_model: "gpt-4o-mini"
+  auth:
+    secretRef: openai-api-key:api-key
+---
+apiVersion: orloj.dev/v1
+kind: Memory
+metadata:
+  name: petstore-memory
+  namespace: orloj
+spec:
+  provider: postgres
+  type: conversation
+---
+apiVersion: orloj.dev/v1
+kind: McpServer
+metadata:
+  name: petstore-mcp
+  namespace: orloj
+spec:
+  transport: http
+  allowPrivate: true
+  endpoint: "http://petstore-openapi-to-mcp.orloj.svc.cluster.local:3100/mcp"

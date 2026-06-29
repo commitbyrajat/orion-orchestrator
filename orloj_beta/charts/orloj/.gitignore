@@ -1,0 +1,2 @@
+# Helm dependency artifacts (run `helm dependency build` to materialize)
+charts/*.tgz

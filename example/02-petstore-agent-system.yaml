@@ -1,0 +1,263 @@
+apiVersion: orloj.dev/v1
+kind: Tool
+metadata:
+  name: petstore-proxy-pet-create
+  namespace: orloj
+spec:
+  type: cli
+  description: "Create a Petstore pet through the in-cluster Petstore API proxy"
+  input_schema:
+    type: object
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+        description: "Pet ID"
+      name:
+        type: string
+        description: "Pet name"
+      status:
+        type: string
+        enum: [available, pending, sold]
+        description: "Pet status"
+      photoUrl:
+        type: string
+        description: "Pet photo URL"
+    required: [id, name, status, photoUrl]
+  cli:
+    command: wget
+    args:
+      - -qO-
+      - --method=POST
+      - "--header=Content-Type: application/json"
+      - '--body-data={"id":{{ .id }},"name":"{{ .name }}","photoUrls":["{{ .photoUrl }}"],"tags":[{"id":1,"name":"orloj-test"}],"status":"{{ .status }}"}'
+      - http://petstore-api-proxy.orloj.svc.cluster.local:8080/v2/pet
+    output: stdout
+  risk_level: low
+  operation_classes:
+    - write
+  runtime:
+    timeout: 30s
+    isolation_mode: none
+---
+apiVersion: orloj.dev/v1
+kind: Tool
+metadata:
+  name: petstore-proxy-pet-get
+  namespace: orloj
+spec:
+  type: cli
+  description: "Get a Petstore pet by ID through the in-cluster Petstore API proxy"
+  input_schema:
+    type: object
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+        description: "Pet ID"
+    required: [id]
+  cli:
+    command: wget
+    args:
+      - -qO-
+      - http://petstore-api-proxy.orloj.svc.cluster.local:8080/v2/pet/{{ .id }}
+    output: stdout
+  risk_level: low
+  operation_classes:
+    - read
+  runtime:
+    timeout: 30s
+    isolation_mode: none
+---
+apiVersion: orloj.dev/v1
+kind: Tool
+metadata:
+  name: petstore-proxy-pet-update
+  namespace: orloj
+spec:
+  type: cli
+  description: "Update a Petstore pet through the in-cluster Petstore API proxy"
+  input_schema:
+    type: object
+    additionalProperties: false
+    properties:
+      id:
+        type: string
+        description: "Pet ID"
+      name:
+        type: string
+        description: "Pet name"
+      status:
+        type: string
+        enum: [available, pending, sold]
+        description: "Pet status"
+      photoUrl:
+        type: string
+        description: "Pet photo URL"
+    required: [id, name, status, photoUrl]
+  cli:
+    command: wget
+    args:
+      - -qO-
+      - --method=PUT
+      - "--header=Content-Type: application/json"
+      - '--body-data={"id":{{ .id }},"name":"{{ .name }}","photoUrls":["{{ .photoUrl }}"],"tags":[{"id":1,"name":"orloj-test"}],"status":"{{ .status }}"}'
+      - http://petstore-api-proxy.orloj.svc.cluster.local:8080/v2/pet
+    output: stdout
+  risk_level: low
+  operation_classes:
+    - write
+  runtime:
+    timeout: 30s
+    isolation_mode: none
+---
+apiVersion: orloj.dev/v1
+kind: Tool
+metadata:
+  name: petstore-proxy-pet-find-by-status
+  namespace: orloj
+spec:
+  type: cli
+  description: "Find Petstore pets by status through the in-cluster Petstore API proxy"
+  input_schema:
+    type: object
+    additionalProperties: false
+    properties:
+      status:
+        type: string
+        description: "Pet status values, for example available, pending, sold, or available,pending,sold"
+    required: [status]
+  cli:
+    command: wget
+    args:
+      - -qO-
+      - http://petstore-api-proxy.orloj.svc.cluster.local:8080/v2/pet/findbystatus?status={{ .status }}
+    output: stdout
+  risk_level: low
+  operation_classes:
+    - read
+  runtime:
+    timeout: 30s
+    isolation_mode: none
+---
+apiVersion: orloj.dev/v1
+kind: AgentPolicy
+metadata:
+  name: petstore-agent-policy
+  namespace: orloj
+spec:
+  apply_mode: scoped
+  target_agents:
+    - petstore-agent
+  target_systems:
+    - petstore-system
+  allowed_models:
+    - gpt-4o-mini
+    - openai-gpt4o-mini
+  blocked_tools: []
+  max_child_depth: 2
+  max_child_tasks: 5
+  max_tokens_per_run: 100000
+---
+apiVersion: orloj.dev/v1
+kind: Agent
+metadata:
+  name: petstore-agent
+  namespace: orloj
+spec:
+  model_ref: openai-gpt4o-mini
+
+  prompt: |
+    You are a Petstore API assistant.
+
+    Always prefer using MCP tools instead of answering from memory.
+    When asked to find or list pets with status available, call petstore-mcp--petstore-pet-findbystatus with status "available".
+    When asked to create, read, update, or status-query Petstore pets in test scenarios, use the petstore-proxy-* tools because they expose complete JSON schemas for the Petstore proxy.
+    To create a pet, call petstore-proxy-pet-create and then petstore-proxy-pet-get to verify it.
+    To update a pet, call petstore-proxy-pet-update and then petstore-proxy-pet-get to verify it.
+    To list statuses available, pending, and sold, call petstore-proxy-pet-find-by-status for each requested status or once with a comma-separated status string.
+    If the user asks for another Petstore operation, choose the matching Petstore MCP tool from the full allowed tool set.
+
+    Available capabilities include:
+      - Find pets by status
+      - Find pets by tags
+      - Get pet by ID
+      - Create pets
+      - Update pets
+      - Delete pets
+      - Upload pet images
+      - Manage store inventory and orders
+      - Manage users
+      - Proxy-backed create, read, update, and find-by-status test tools
+
+    Before deleting or modifying resources, ask the user for confirmation.
+
+  tools:
+    - petstore-proxy-pet-create
+    - petstore-proxy-pet-get
+    - petstore-proxy-pet-update
+    - petstore-proxy-pet-find-by-status
+    - petstore-mcp--petstore-pet-findbystatus
+    - petstore-mcp--petstore-pet-findbytags
+    - petstore-mcp--petstore-pet-petid-get
+    - petstore-mcp--petstore-pet-post
+    - petstore-mcp--petstore-pet-put
+    - petstore-mcp--petstore-pet-petid-post
+    - petstore-mcp--petstore-pet-petid-delete
+    - petstore-mcp--petstore-pet-petid-uploadimage
+    - petstore-mcp--petstore-store-inventory
+    - petstore-mcp--petstore-store-order
+    - petstore-mcp--petstore-store-order-orderid-get
+    - petstore-mcp--petstore-store-order-orderid-delete
+    - petstore-mcp--petstore-user
+    - petstore-mcp--petstore-user-createwitharray
+    - petstore-mcp--petstore-user-createwithlist
+    - petstore-mcp--petstore-user-username-get
+    - petstore-mcp--petstore-user-username-put
+    - petstore-mcp--petstore-user-username-delete
+    - petstore-mcp--petstore-user-login
+    - petstore-mcp--petstore-user-logout
+
+  allowed_tools:
+    - petstore-proxy-pet-create
+    - petstore-proxy-pet-get
+    - petstore-proxy-pet-update
+    - petstore-proxy-pet-find-by-status
+    - petstore-mcp--petstore-pet-findbystatus
+    - petstore-mcp--petstore-pet-findbytags
+    - petstore-mcp--petstore-pet-petid-get
+    - petstore-mcp--petstore-pet-post
+    - petstore-mcp--petstore-pet-put
+    - petstore-mcp--petstore-pet-petid-post
+    - petstore-mcp--petstore-pet-petid-delete
+    - petstore-mcp--petstore-pet-petid-uploadimage
+    - petstore-mcp--petstore-store-inventory
+    - petstore-mcp--petstore-store-order
+    - petstore-mcp--petstore-store-order-orderid-get
+    - petstore-mcp--petstore-store-order-orderid-delete
+    - petstore-mcp--petstore-user
+    - petstore-mcp--petstore-user-createwitharray
+    - petstore-mcp--petstore-user-createwithlist
+    - petstore-mcp--petstore-user-username-get
+    - petstore-mcp--petstore-user-username-put
+    - petstore-mcp--petstore-user-username-delete
+    - petstore-mcp--petstore-user-login
+    - petstore-mcp--petstore-user-logout
+
+  limits:
+    max_steps: 8
+    timeout: 90s
+---
+apiVersion: orloj.dev/v1
+kind: AgentSystem
+metadata:
+  name: petstore-system
+  namespace: orloj
+spec:
+  agents:
+    - petstore-agent
+  graph:
+    petstore-agent:
+      edges: []
+  a2a:
+    enabled: true

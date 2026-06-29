@@ -1,0 +1,174 @@
+package resources
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestModelEndpointNormalizeDefaults(t *testing.T) {
+	endpoint := ModelEndpoint{
+		Kind:     "ModelEndpoint",
+		Metadata: ObjectMeta{Name: "openai-prod"},
+		Spec:     ModelEndpointSpec{DefaultModel: "gpt-4o-mini"},
+	}
+	if err := endpoint.Normalize(); err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	if endpoint.Metadata.Namespace != DefaultNamespace {
+		t.Fatalf("expected default namespace, got %q", endpoint.Metadata.Namespace)
+	}
+	if endpoint.Spec.Provider != "openai" {
+		t.Fatalf("expected provider openai, got %q", endpoint.Spec.Provider)
+	}
+	if endpoint.Spec.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("unexpected default base URL %q", endpoint.Spec.BaseURL)
+	}
+}
+
+func TestModelEndpointNormalizeAllowsCustomProvider(t *testing.T) {
+	endpoint := ModelEndpoint{
+		Kind:     "ModelEndpoint",
+		Metadata: ObjectMeta{Name: "bad"},
+		Spec: ModelEndpointSpec{
+			Provider:     "custom-llm",
+			DefaultModel: "custom-model",
+		},
+	}
+	if err := endpoint.Normalize(); err != nil {
+		t.Fatalf("expected custom provider to normalize, got %v", err)
+	}
+	if endpoint.Spec.Provider != "custom-llm" {
+		t.Fatalf("expected normalized provider custom-llm, got %q", endpoint.Spec.Provider)
+	}
+}
+
+func TestModelEndpointNormalizeAnthropicDefaults(t *testing.T) {
+	endpoint := ModelEndpoint{
+		Kind:     "ModelEndpoint",
+		Metadata: ObjectMeta{Name: "anthropic-prod"},
+		Spec: ModelEndpointSpec{
+			Provider:     "Anthropic",
+			DefaultModel: "claude-3-5-sonnet-latest",
+			Options: map[string]string{
+				" Anthropic_Version ": " 2023-06-01 ",
+			},
+		},
+	}
+	if err := endpoint.Normalize(); err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	if endpoint.Spec.Provider != "anthropic" {
+		t.Fatalf("expected provider anthropic, got %q", endpoint.Spec.Provider)
+	}
+	if endpoint.Spec.BaseURL != "https://api.anthropic.com/v1" {
+		t.Fatalf("unexpected anthropic base URL %q", endpoint.Spec.BaseURL)
+	}
+	if endpoint.Spec.Options["anthropic_version"] != "2023-06-01" {
+		t.Fatalf("expected normalized option key/value, got %+v", endpoint.Spec.Options)
+	}
+}
+
+func TestModelEndpointNormalizeOllamaDefaults(t *testing.T) {
+	endpoint := ModelEndpoint{
+		Kind:     "ModelEndpoint",
+		Metadata: ObjectMeta{Name: "ollama-local"},
+		Spec: ModelEndpointSpec{
+			Provider:     "ollama",
+			DefaultModel: "llama3.1",
+		},
+	}
+	if err := endpoint.Normalize(); err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	if endpoint.Spec.BaseURL != "http://127.0.0.1:11434" {
+		t.Fatalf("unexpected ollama base URL %q", endpoint.Spec.BaseURL)
+	}
+	if endpoint.Spec.AllowPrivate == nil || !*endpoint.Spec.AllowPrivate {
+		t.Fatalf("expected ollama to default to allowPrivate=true, got %+v", endpoint.Spec.AllowPrivate)
+	}
+}
+
+func TestModelEndpointNormalizeAllowPrivateDefaultFalse(t *testing.T) {
+	endpoint := ModelEndpoint{
+		Kind:     "ModelEndpoint",
+		Metadata: ObjectMeta{Name: "openai-prod"},
+		Spec: ModelEndpointSpec{
+			Provider:     "openai",
+			DefaultModel: "gpt-4o-mini",
+		},
+	}
+	if err := endpoint.Normalize(); err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	if endpoint.Spec.AllowPrivate == nil || *endpoint.Spec.AllowPrivate {
+		t.Fatalf("expected openai to default to allowPrivate=false, got %+v", endpoint.Spec.AllowPrivate)
+	}
+}
+
+func TestModelEndpointNormalizeAllowPrivateExplicit(t *testing.T) {
+	truePtr := true
+	endpoint := ModelEndpoint{
+		Kind:     "ModelEndpoint",
+		Metadata: ObjectMeta{Name: "internal-vllm"},
+		Spec: ModelEndpointSpec{
+			Provider:     "openai-compatible",
+			BaseURL:      "http://vllm.internal:8000/v1",
+			DefaultModel: "llama3.1-70b",
+			AllowPrivate: &truePtr,
+		},
+	}
+	if err := endpoint.Normalize(); err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	if endpoint.Spec.AllowPrivate == nil || !*endpoint.Spec.AllowPrivate {
+		t.Fatalf("expected explicit allowPrivate=true to survive normalization")
+	}
+}
+
+func TestModelEndpointNormalizeRequiresDefaultModel(t *testing.T) {
+	endpoint := ModelEndpoint{
+		Kind:     "ModelEndpoint",
+		Metadata: ObjectMeta{Name: "missing-model"},
+		Spec:     ModelEndpointSpec{Provider: "openai"},
+	}
+	err := endpoint.Normalize()
+	if err == nil {
+		t.Fatal("expected error when default_model is empty")
+	}
+	if !strings.Contains(err.Error(), "default_model") {
+		t.Fatalf("expected default_model in error, got %v", err)
+	}
+}
+
+func TestParseModelEndpointManifestYAML(t *testing.T) {
+	raw := []byte(`apiVersion: orloj.dev/v1
+kind: ModelEndpoint
+metadata:
+  name: openai-team-a
+  namespace: team-a
+spec:
+  provider: openai
+  base_url: https://api.openai.com/v1
+  default_model: gpt-4o-mini
+  options:
+    api_variant: responses
+  auth:
+    secretRef: openai-api-key
+`)
+	endpoint, err := ParseModelEndpointManifest(raw)
+	if err != nil {
+		t.Fatalf("parse model endpoint failed: %v", err)
+	}
+	if endpoint.Metadata.Name != "openai-team-a" || endpoint.Metadata.Namespace != "team-a" {
+		t.Fatalf("unexpected metadata: %+v", endpoint.Metadata)
+	}
+	if endpoint.Spec.Provider != "openai" {
+		t.Fatalf("unexpected provider %q", endpoint.Spec.Provider)
+	}
+	if endpoint.Spec.Options["api_variant"] != "responses" {
+		t.Fatalf("expected parsed options map, got %+v", endpoint.Spec.Options)
+	}
+	if endpoint.Spec.Auth.SecretRef != "openai-api-key" {
+		t.Fatalf("unexpected auth secretRef %q", endpoint.Spec.Auth.SecretRef)
+	}
+}

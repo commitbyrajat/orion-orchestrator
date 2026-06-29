@@ -1,0 +1,173 @@
+package agentruntime
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+)
+
+const WASMToolModuleContractVersionV1 = "v1"
+
+const (
+	wasmToolModuleStatusOK     = ToolExecutionStatusOK
+	wasmToolModuleStatusError  = ToolExecutionStatusError
+	wasmToolModuleStatusDenied = ToolExecutionStatusDenied
+)
+
+var errWASMToolModuleContract = errors.New("wasm tool module contract violation")
+
+type WASMToolModuleRequest struct {
+	ContractVersion string                   `json:"contract_version,omitempty"`
+	Namespace       string                   `json:"namespace,omitempty"`
+	Tool            string                   `json:"tool,omitempty"`
+	Input           string                   `json:"input,omitempty"`
+	Capabilities    []string                 `json:"capabilities,omitempty"`
+	RiskLevel       string                   `json:"risk_level,omitempty"`
+	Runtime         WASMToolModuleReqRuntime `json:"runtime,omitempty"`
+	Auth            WASMToolModuleReqAuth    `json:"auth,omitempty"`
+}
+
+type WASMToolModuleReqAuth struct {
+	Profile string            `json:"profile,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+type WASMToolModuleReqRuntime struct {
+	Entrypoint     string `json:"entrypoint,omitempty"`
+	MaxMemoryBytes int64  `json:"max_memory_bytes,omitempty"`
+	Fuel           uint64 `json:"fuel,omitempty"`
+	EnableWASI     bool   `json:"enable_wasi"`
+}
+
+type WASMToolModuleResponse struct {
+	ContractVersion string                `json:"contract_version,omitempty"`
+	Status          string                `json:"status,omitempty"`
+	Output          string                `json:"output,omitempty"`
+	Error           *ToolExecutionFailure `json:"error,omitempty"`
+}
+
+func BuildWASMToolModuleRequest(req WASMToolExecuteRequest) WASMToolModuleRequest {
+	runtime := req.Runtime.normalized()
+	return WASMToolModuleRequest{
+		ContractVersion: WASMToolModuleContractVersionV1,
+		Namespace:       strings.TrimSpace(req.Namespace),
+		Tool:            strings.TrimSpace(req.Tool),
+		Input:           req.Input,
+		Capabilities:    normalizeToolContractLabels(req.Capabilities),
+		RiskLevel:       strings.ToLower(strings.TrimSpace(req.RiskLevel)),
+		Runtime: WASMToolModuleReqRuntime{
+			Entrypoint:     strings.TrimSpace(runtime.Entrypoint),
+			MaxMemoryBytes: runtime.MaxMemoryBytes,
+			Fuel:           runtime.Fuel,
+			EnableWASI:     runtime.EnableWASI,
+		},
+		Auth: WASMToolModuleReqAuth{
+			Profile: strings.TrimSpace(req.AuthProfile),
+			Headers: req.AuthHeaders,
+		},
+	}
+}
+
+func DecodeWASMToolModuleResponse(raw string) (WASMToolModuleResponse, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return WASMToolModuleResponse{}, newWASMToolModuleContractError("empty wasm module response")
+	}
+
+	var response WASMToolModuleResponse
+	if err := json.Unmarshal([]byte(trimmed), &response); err != nil {
+		return WASMToolModuleResponse{}, newWASMToolModuleContractError(fmt.Sprintf("invalid wasm module response JSON: %v", err))
+	}
+
+	response.ContractVersion = strings.ToLower(strings.TrimSpace(response.ContractVersion))
+	if response.ContractVersion == "" {
+		return WASMToolModuleResponse{}, newWASMToolModuleContractError("missing response contract_version")
+	}
+	if response.ContractVersion != WASMToolModuleContractVersionV1 {
+		return WASMToolModuleResponse{}, newWASMToolModuleContractError(
+			fmt.Sprintf("unsupported wasm module contract_version %q", response.ContractVersion),
+		)
+	}
+
+	response.Status = strings.ToLower(strings.TrimSpace(response.Status))
+	switch response.Status {
+	case wasmToolModuleStatusOK, wasmToolModuleStatusError, wasmToolModuleStatusDenied:
+	default:
+		return WASMToolModuleResponse{}, newWASMToolModuleContractError(
+			fmt.Sprintf("unsupported wasm module status %q", response.Status),
+		)
+	}
+
+	if response.Error != nil {
+		response.Error.Code = strings.TrimSpace(response.Error.Code)
+		response.Error.Reason = strings.TrimSpace(response.Error.Reason)
+		response.Error.Message = strings.TrimSpace(response.Error.Message)
+		if response.Error.Details == nil {
+			response.Error.Details = nil
+		}
+	}
+
+	return response, nil
+}
+
+func IsWASMToolModuleContractError(err error) bool {
+	return errors.Is(err, errWASMToolModuleContract)
+}
+
+func newWASMToolModuleContractError(message string) error {
+	return fmt.Errorf("%w: %s", errWASMToolModuleContract, strings.TrimSpace(message))
+}
+
+func wasmToolModuleFailureAsToolError(tool string, response WASMToolModuleResponse, status string) error {
+	defaultCode := ToolCodeExecutionFailed
+	defaultReason := ToolReasonBackendFailure
+	defaultRetryable := true
+	if status == ToolStatusDenied {
+		defaultCode = ToolCodePermissionDenied
+		defaultReason = ToolReasonPermissionDenied
+		defaultRetryable = false
+	}
+
+	code := defaultCode
+	reason := defaultReason
+	retryable := defaultRetryable
+	message := "wasm module execution failed"
+	details := map[string]string{
+		"isolation_mode":   "wasm",
+		"contract_version": strings.TrimSpace(response.ContractVersion),
+		"module_status":    strings.TrimSpace(response.Status),
+		"tool":             strings.TrimSpace(tool),
+	}
+	if response.Error != nil {
+		if trimmed := strings.TrimSpace(response.Error.Code); trimmed != "" {
+			code = trimmed
+		}
+		if trimmed := strings.TrimSpace(response.Error.Reason); trimmed != "" {
+			reason = trimmed
+		}
+		retryable = response.Error.Retryable
+		if trimmed := strings.TrimSpace(response.Error.Message); trimmed != "" {
+			message = trimmed
+		}
+		for key, value := range response.Error.Details {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			details[key] = strings.TrimSpace(value)
+		}
+	}
+	if strings.TrimSpace(tool) != "" {
+		message = fmt.Sprintf("wasm module error for tool=%s: %s", strings.TrimSpace(tool), message)
+	}
+	return NewToolError(
+		status,
+		code,
+		reason,
+		retryable,
+		message,
+		nil,
+		details,
+	)
+}

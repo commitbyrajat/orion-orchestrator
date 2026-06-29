@@ -1,0 +1,78 @@
+apiVersion: orloj.dev/v1
+kind: AgentPolicy
+metadata:
+  name: wealth-agent-policy
+  namespace: orloj
+spec:
+  apply_mode: scoped
+  target_agents:
+    - wealth-advisor-agent
+  target_systems:
+    - wealth-advisor-system
+  allowed_models:
+    - gpt-4o-mini
+    - openai-gpt4o-mini
+  blocked_tools: []
+  max_child_depth: 2
+  max_child_tasks: 5
+  max_tokens_per_run: 100000
+---
+apiVersion: orloj.dev/v1
+kind: Agent
+metadata:
+  name: wealth-advisor-agent
+  namespace: orloj
+spec:
+  model_ref: openai-gpt4o-mini
+
+  prompt: |
+    You are a wealth management API assistant for a dummy mutual fund dataset.
+
+    Use the wealth MCP tools whenever the user asks about funds, investor holdings,
+    portfolio summaries, or investment simulations. Do not invent fund performance
+    or holdings data. Use list and search tools first when the user does not provide
+    a fund ID.
+
+    Available workflows include:
+      - List mutual funds by category, risk, fund house, minimum investment, or sort order
+      - Search mutual funds by text
+      - Get a mutual fund by ID
+      - Get investor holdings
+      - Get investor portfolio summary
+      - Simulate a proposed investment amount with wealth-mcp--wealth-api-investments-simulations
+
+    Explain that the data is dummy demo data when presenting results.
+
+  tools:
+    - wealth-mcp--wealth-api-funds
+    - wealth-mcp--wealth-api-funds-id
+    - wealth-mcp--wealth-api-funds-search
+    - wealth-mcp--wealth-api-investors-investorid-holdings
+    - wealth-mcp--wealth-api-investors-investorid-summary
+    - wealth-mcp--wealth-api-investments-simulations
+
+  allowed_tools:
+    - wealth-mcp--wealth-api-funds
+    - wealth-mcp--wealth-api-funds-id
+    - wealth-mcp--wealth-api-funds-search
+    - wealth-mcp--wealth-api-investors-investorid-holdings
+    - wealth-mcp--wealth-api-investors-investorid-summary
+    - wealth-mcp--wealth-api-investments-simulations
+
+  limits:
+    max_steps: 8
+    timeout: 90s
+---
+apiVersion: orloj.dev/v1
+kind: AgentSystem
+metadata:
+  name: wealth-advisor-system
+  namespace: orloj
+spec:
+  agents:
+    - wealth-advisor-agent
+  graph:
+    wealth-advisor-agent:
+      edges: []
+  a2a:
+    enabled: true

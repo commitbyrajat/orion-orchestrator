@@ -1,0 +1,47 @@
+components:
+  schemas:
+    ModelEndpointAuth:
+      type: object
+      properties:
+        secretRef: { type: string }
+    ModelEndpointSpec:
+      type: object
+      properties:
+        provider: { type: string }
+        base_url: { type: string }
+        default_model: { type: string }
+        options: { type: object, additionalProperties: { type: string } }
+        auth: { $ref: "#/components/schemas/ModelEndpointAuth" }
+        allowPrivate:
+          type: boolean
+          description: |
+            Permit outbound connections from this endpoint's gateway to
+            RFC 1918 / ULA / carrier-grade NAT addresses (e.g. a
+            self-hosted Ollama, vLLM, LM Studio, or LiteLLM proxy on a
+            private network). Loopback, link-local, cloud metadata, and
+            unspecified addresses remain blocked regardless. Defaults:
+            ollama -> true, all other providers -> false.
+    ModelEndpointStatus:
+      type: object
+      properties:
+        phase: { type: string }
+        lastError: { type: string }
+        observedGeneration: { type: integer, format: int64 }
+    ModelEndpoint:
+      type: object
+      required: [apiVersion, kind, metadata, spec]
+      properties:
+        apiVersion: { type: string, enum: [orloj.dev/v1] }
+        kind: { type: string, enum: [ModelEndpoint] }
+        metadata: { $ref: "common.yaml#/components/schemas/ObjectMeta" }
+        spec: { $ref: "#/components/schemas/ModelEndpointSpec" }
+        status: { $ref: "#/components/schemas/ModelEndpointStatus" }
+    ModelEndpointList:
+      allOf:
+        - { $ref: "common.yaml#/components/schemas/ListMeta" }
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/ModelEndpoint" }

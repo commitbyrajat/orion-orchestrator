@@ -1,0 +1,53 @@
+name: links
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    paths:
+      - "**/*.md"
+      - ".github/workflows/links.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      markdown: ${{ steps.filter.outputs.markdown }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            markdown:
+              - "**/*.md"
+              - ".github/workflows/links.yml"
+
+  markdown-links:
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip (no markdown changes)
+        if: needs.changes.outputs.markdown != 'true'
+        run: echo "No markdown changes in this event; skipping link check."
+
+      - name: Checkout
+        if: needs.changes.outputs.markdown == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Check markdown links (internal)
+        if: needs.changes.outputs.markdown == 'true'
+        uses: lycheeverse/lychee-action@8646ba30535128ac92d33dfc9133794bfdd9b411 # v2
+        with:
+          fail: true
+          args: >-
+            --offline
+            --no-progress
+            --exclude-path docs/node_modules
+            --exclude-path docs/dist
+            --exclude-path frontend/node_modules
+            "./**/*.md"

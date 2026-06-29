@@ -1,0 +1,144 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wealth-management-api
+  namespace: orloj
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wealth-management-api
+  template:
+    metadata:
+      labels:
+        app: wealth-management-api
+    spec:
+      containers:
+        - name: wealth-management-api
+          image: docker.io/rajat965ng/wealth-management-example2:0.0.2
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 45
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wealth-management-api
+  namespace: orloj
+spec:
+  type: ClusterIP
+  selector:
+    app: wealth-management-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wealth-management-api
+  namespace: orloj
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: wealth.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wealth-management-api
+                port:
+                  number: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wealth-openapi-to-mcp
+  namespace: orloj
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wealth-openapi-to-mcp
+  template:
+    metadata:
+      annotations:
+        example.orloj.dev/openapi-version: "0.0.2"
+      labels:
+        app: wealth-openapi-to-mcp
+    spec:
+      containers:
+        - name: openapi-to-mcp
+          image: evilfreelancer/openapi-to-mcp:latest
+          ports:
+            - containerPort: 3100
+          env:
+            - name: MCP_SERVER_NAME
+              value: wealth-mcp
+            - name: MCP_PORT
+              value: "3100"
+            - name: MCP_HOST
+              value: "0.0.0.0"
+            - name: MCP_OPENAPI_SPEC
+              value: "http://wealth-management-api.orloj.svc.cluster.local:8080/v3/api-docs"
+            - name: MCP_API_BASE_URL
+              value: "http://wealth-management-api.orloj.svc.cluster.local:8080"
+            - name: MCP_TOOL_PREFIX
+              value: "wealth_"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wealth-openapi-to-mcp
+  namespace: orloj
+spec:
+  type: ClusterIP
+  selector:
+    app: wealth-openapi-to-mcp
+  ports:
+    - name: http
+      port: 3100
+      targetPort: 3100
+---
+apiVersion: orloj.dev/v1
+kind: Memory
+metadata:
+  name: wealth-memory
+  namespace: orloj
+spec:
+  provider: postgres
+  type: conversation
+---
+apiVersion: orloj.dev/v1
+kind: McpServer
+metadata:
+  name: wealth-mcp
+  namespace: orloj
+spec:
+  transport: http
+  allowPrivate: true
+  endpoint: "http://wealth-openapi-to-mcp.orloj.svc.cluster.local:3100/mcp"
+  tool_filter:
+    include:
+      - wealth_api_funds
+      - wealth_api_funds_id
+      - wealth_api_funds_search
+      - wealth_api_investments_simulate
+      - wealth_api_investments_simulations
+      - wealth_api_investors_investorid_holdings
+      - wealth_api_investors_investorid_summary

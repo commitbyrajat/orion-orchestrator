@@ -1,0 +1,299 @@
+# -- Global image settings
+image:
+  registry: docker.io
+  server:
+    repository: rajat965ng/orloj-orlojd
+    tag: "mcp-policy-log-clean"
+  worker:
+    repository: rajat965ng/orloj-orlojworker
+    tag: "mcp-required-tool-status"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+server:
+  replicaCount: 1
+  addr: ":8080"
+  containerPort: 8080
+  uiPath: "/"
+
+  storageBackend: postgres
+  taskExecutionMode: message-driven
+  eventBusBackend: nats
+  agentMessageBusBackend: nats-jetstream
+
+  embeddedWorker: false
+  embeddedWorkerMaxConcurrentTasks: 1
+
+  logLevel: info
+  logFormat: json
+
+  postgres:
+    maxOpenConns: 20
+    maxIdleConns: 10
+    connMaxLifetime: 30m
+
+  reconcileInterval: 2s
+  trustedProxies: ""
+
+  extraArgs: []
+  extraEnv: []
+  extraEnvFrom: []
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  ingress:
+    enabled: true
+    className: nginx
+    annotations: {}
+    hosts:
+      - host: orloj.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  livenessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 5
+
+  readinessProbe:
+    initialDelaySeconds: 3
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podLabels: {}
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  pdb:
+    enabled: false
+    minAvailable: 1
+
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+
+worker:
+  replicaCount: 2
+  region: default
+  maxConcurrentTasks: 1
+
+  taskExecutionMode: message-driven
+  agentMessageBusBackend: nats-jetstream
+  agentMessageConsume: true
+
+  leaseDuration: 30s
+  heartbeatInterval: 10s
+  reconcileInterval: 1s
+
+  healthzAddr: ":8081"
+  healthzPort: 8081
+
+  logLevel: info
+  logFormat: json
+
+  gpu: false
+  supportedModels: ""
+
+  postgres:
+    maxOpenConns: 20
+    maxIdleConns: 10
+    connMaxLifetime: 30m
+
+  extraArgs: []
+  extraEnv: []
+  extraEnvFrom: []
+
+  livenessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 5
+
+  readinessProbe:
+    initialDelaySeconds: 3
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podLabels: {}
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+a2a:
+  publicBaseURL: "http://orloj.local"
+  protocolVersion: ""
+  cardCacheTTL: "5m"
+  allowPrivateEndpoints: false
+  remoteAgents: []
+  rateLimit:
+    enabled: true
+    requestsPerMinute: 30
+    maxConcurrentSubscriptions: 10
+
+auth:
+  mode: "native"
+  apiToken: "orloj-api-token-change-me"
+  setupToken: "orloj-setup-token-change-me"
+
+# secretEncryptionKey: "replace-with-output-of-openssl-rand-hex-32"
+secretEncryptionKey: "4f133d27f1327e0caa57d778ef73a7b6725a8a9b426e86dc0a71a69c3c4b515f"
+
+
+existingSecret: ""
+
+toolIsolation:
+  backend: none
+  containerRuntime: docker
+  containerImage: "curlimages/curl:8.8.0"
+  containerNetwork: none
+  containerMemory: 128m
+  containerCpus: "0.50"
+  containerPidsLimit: 64
+
+  kubernetes:
+    enabled: true
+    namespace: "orloj"
+    serviceAccount: ""
+    jobTTLSeconds: 300
+    defaultImage: "curlimages/curl:8.8.0"
+
+agentExecution:
+  kubernetes:
+    enabled: false
+    namespace: "orloj"
+    serviceAccount: ""
+    image: "docker.io/rajat965ng/orloj-orlojworker:mcp-required-tool-status"
+    jobTTLSeconds: 600
+    defaultMemory: "512Mi"
+    defaultCPU: "500m"
+
+cliToolAllowedCommands: "curl,wget,cat,echo,ls,pwd,env"
+
+nats:
+  enabled: false
+  config:
+    jetstream:
+      enabled: true
+      fileStore:
+        pvc:
+          size: 10Gi
+
+postgresql:
+  enabled: false
+  auth:
+    username: orloj
+    password: ""
+    database: orloj
+    existingSecret: ""
+  primary:
+    persistence:
+      size: 10Gi
+
+externalPostgres:
+  dsn: "postgres://orloj:orloj123@orloj-postgres-postgresql.orloj-data.svc.cluster.local:5432/orloj?sslmode=disable"
+  existingSecret: ""
+  existingSecretKey: "postgres-dsn"
+
+crdConflictPolicy: warn
+
+externalNats:
+  url: "nats://orloj-nats.orloj-nats.svc.cluster.local:4222"
+
+operator:
+  enabled: true
+  installCRDs: true
+  replicaCount: 1
+  image:
+    repository: rajat965ng/orloj-operator
+    tag: "mcp-accept-local"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  statusSyncInterval: 5s
+  leaderElection: true
+  healthzPort: 8081
+  metricsPort: 8080
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+  pdb:
+    enabled: true
+    minAvailable: 1

@@ -1,0 +1,120 @@
+components:
+  schemas:
+    ToolRetryPolicy:
+      type: object
+      properties:
+        max_attempts: { type: integer }
+        backoff: { type: string }
+        max_backoff: { type: string }
+        jitter: { type: string }
+    ToolRuntimePolicy:
+      type: object
+      properties:
+        timeout: { type: string }
+        isolation_mode: { type: string }
+        retry: { $ref: "#/components/schemas/ToolRetryPolicy" }
+    ToolAuth:
+      type: object
+      properties:
+        profile: { type: string }
+        secretRef: { type: string }
+        headerName: { type: string }
+        tokenURL: { type: string }
+        scopes:
+          type: array
+          items: { type: string }
+    ToolCliEnvRef:
+      type: object
+      required: [name, secretRef]
+      properties:
+        name: { type: string }
+        secretRef: { type: string }
+        key: { type: string }
+    ContainerResources:
+      type: object
+      description: "Per-tool or per-McpServer container resource overrides. When set, these take precedence over global --tool-container-{memory,cpus,pids-limit} flags."
+      properties:
+        memory: { type: string, description: "Container memory limit (e.g. 128m, 1g). Overrides --tool-container-memory." }
+        cpus: { type: string, description: "Container CPU limit (e.g. 0.50, 1.0). Overrides --tool-container-cpus." }
+        pids_limit: { type: integer, description: "Container PIDs limit. Overrides --tool-container-pids-limit." }
+    ToolCliSpec:
+      type: object
+      properties:
+        command: { type: string }
+        args:
+          type: array
+          items: { type: string }
+        image: { type: string }
+        image_pull_secret: { type: string, description: "Name of a Secret containing registry credentials for pulling cli.image." }
+        network: { type: string }
+        stdin_from_input: { type: boolean }
+        output: { type: string }
+        working_dir: { type: string }
+        env:
+          type: object
+          additionalProperties: { type: string }
+        env_from:
+          type: array
+          items: { $ref: "#/components/schemas/ToolCliEnvRef" }
+        resources: { $ref: "#/components/schemas/ContainerResources" }
+    ToolWasmSpec:
+      type: object
+      properties:
+        module: { type: string, description: "Local path, HTTPS URL, or OCI reference (oci://...) to the .wasm module" }
+        entrypoint: { type: string, description: "Exported function name to call (default: run)" }
+        max_memory_bytes: { type: integer, format: int64, description: "Maximum memory in bytes (default: 64MB)" }
+        fuel: { type: integer, format: uint64, description: "Maximum fuel units for execution metering" }
+        enable_wasi: { type: boolean, description: "Enable WASI capabilities (stdin/stdout/stderr)" }
+        image_pull_secret: { type: string, description: "Name of a Secret containing registry credentials for pulling OCI-referenced WASM modules." }
+    ToolSpec:
+      type: object
+      properties:
+        type: { type: string, enum: [http, external, grpc, webhook-callback, mcp, wasm, cli, a2a] }
+        endpoint: { type: string }
+        description: { type: string }
+        input_schema: { type: object, additionalProperties: true }
+        mcp_server_ref: { type: string }
+        mcp_tool_name: { type: string }
+        cli: { $ref: "#/components/schemas/ToolCliSpec" }
+        wasm: { $ref: "#/components/schemas/ToolWasmSpec" }
+        capabilities:
+          type: array
+          items: { type: string }
+        operation_classes:
+          type: array
+          items: { type: string }
+        risk_level: { type: string }
+        runtime: { $ref: "#/components/schemas/ToolRuntimePolicy" }
+        auth: { $ref: "#/components/schemas/ToolAuth" }
+        a2a:
+          $ref: "#/components/schemas/ToolA2ASpec"
+    ToolA2ASpec:
+      type: object
+      properties:
+        agent_url: { type: string, format: uri, description: "Remote A2A agent endpoint URL or base URL" }
+        protocol_version: { type: string, description: "A2A protocol version (defaults to server-configured version)" }
+        prefer_streaming: { type: boolean, description: "Prefer streaming (sendSubscribe) when the remote agent supports it" }
+    ToolStatus:
+      type: object
+      properties:
+        phase: { type: string }
+        lastError: { type: string }
+        observedGeneration: { type: integer, format: int64 }
+    Tool:
+      type: object
+      required: [apiVersion, kind, metadata, spec]
+      properties:
+        apiVersion: { type: string, enum: [orloj.dev/v1] }
+        kind: { type: string, enum: [Tool] }
+        metadata: { $ref: "common.yaml#/components/schemas/ObjectMeta" }
+        spec: { $ref: "#/components/schemas/ToolSpec" }
+        status: { $ref: "#/components/schemas/ToolStatus" }
+    ToolList:
+      allOf:
+        - { $ref: "common.yaml#/components/schemas/ListMeta" }
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/Tool" }

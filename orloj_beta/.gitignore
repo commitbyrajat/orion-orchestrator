@@ -1,0 +1,48 @@
+# Go test binaries
+*.test
+
+# GoReleaser output
+/dist/
+
+# Local build outputs
+/orlojd
+/orlojworker
+/orlojctl
+/orloj-operator
+/orloj-loadtest
+/orloj-alertcheck
+/agentopsd
+/agentctl
+/agentworker
+*.out
+coverage.out
+
+# Local environment files
+.env
+.env.*
+!.env.example
+.envrc
+
+# Logs and OS/editor noise
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Frontend dependencies and build outputs
+/frontend/node_modules/
+/frontend/dist/*
+!/frontend/dist/placeholder.txt
+
+# Docs site dependencies and build outputs
+/docs/node_modules/
+/docs/dist/
+
+# Testing artifacts
+/testing/artifacts/
+
+# Python bytecode/cache
+__pycache__/
+*.py[cod]

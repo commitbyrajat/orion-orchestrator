@@ -1,0 +1,53 @@
+components:
+  schemas:
+    AgentPolicySpec:
+      type: object
+      properties:
+        max_tokens_per_run: { type: integer }
+        allowed_models:
+          type: array
+          items: { type: string }
+        blocked_tools:
+          type: array
+          items: { type: string }
+        apply_mode: { type: string }
+        target_systems:
+          type: array
+          items: { type: string }
+        target_tasks:
+          type: array
+          items: { type: string }
+        target_agents:
+          type: array
+          items: { type: string }
+          description: Agent names this policy applies to. When set, only listed agents are affected; other agents in the same system/task are unconstrained by this policy.
+        max_child_depth:
+          type: integer
+          description: Maximum nesting depth for tasks created by orloj.task.create. Default 5.
+        max_child_tasks:
+          type: integer
+          description: Maximum number of child tasks a single task execution can create via orloj.task.create. Default 20.
+    PolicyStatus:
+      type: object
+      properties:
+        phase: { type: string }
+        lastError: { type: string }
+        observedGeneration: { type: integer, format: int64 }
+    AgentPolicy:
+      type: object
+      required: [apiVersion, kind, metadata, spec]
+      properties:
+        apiVersion: { type: string, enum: [orloj.dev/v1] }
+        kind: { type: string, enum: [AgentPolicy] }
+        metadata: { $ref: "common.yaml#/components/schemas/ObjectMeta" }
+        spec: { $ref: "#/components/schemas/AgentPolicySpec" }
+        status: { $ref: "#/components/schemas/PolicyStatus" }
+    AgentPolicyList:
+      allOf:
+        - { $ref: "common.yaml#/components/schemas/ListMeta" }
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/AgentPolicy" }

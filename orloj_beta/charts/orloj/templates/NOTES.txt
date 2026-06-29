@@ -1,0 +1,53 @@
+🎯 Orloj has been deployed!
+
+{{- if .Values.server.ingress.enabled }}
+Access the web console at:
+{{- range .Values.server.ingress.hosts }}
+  https://{{ .host }}
+{{- end }}
+{{- else }}
+
+Access the web console by port-forwarding:
+
+  kubectl port-forward svc/{{ include "orloj.fullname" . }}-server {{ .Values.server.service.port }}:{{ .Values.server.service.port }} -n {{ .Release.Namespace }}
+
+  Then open http://localhost:{{ .Values.server.service.port }}
+{{- end }}
+
+Workers: {{ .Values.worker.replicaCount }} replica(s) in region "{{ .Values.worker.region }}"
+
+{{- if eq .Values.auth.mode "native" }}
+
+Auth mode: native
+{{- if .Values.auth.setupToken }}
+Bootstrap the first admin account at /v1/auth/setup (setup token required).
+{{- else }}
+Bootstrap the first admin account at /v1/auth/setup
+{{- end }}
+{{- else if eq .Values.auth.mode "off" }}
+
+⚠️  Auth mode is OFF. Set auth.mode=native and auth.setupToken for production use.
+{{- end }}
+
+CLI quickstart:
+
+  orlojctl config set-context default \
+    --server http://localhost:{{ .Values.server.service.port }} \
+    {{- if .Values.auth.apiToken }}
+    --token <your-api-token> \
+    {{- end }}
+    --namespace default
+
+  orlojctl init my-first-system
+  orlojctl apply -f my-first-system/ --run
+  orlojctl trace my-first-system-task
+{{- if .Values.a2a.publicBaseURL }}
+
+A2A Protocol endpoints are configured. AgentSystems are exposed only when spec.a2a.enabled is true.
+- Agent Card: {{ .Values.a2a.publicBaseURL }}/.well-known/agent-card.json
+- Per-system cards: {{ .Values.a2a.publicBaseURL }}/v1/agent-systems/<name>/.well-known/agent-card.json
+- JSON-RPC endpoint: {{ .Values.a2a.publicBaseURL }}/a2a
+- Registry: {{ .Values.a2a.publicBaseURL }}/v1/a2a/agents
+
+Ensure a2a.publicBaseURL is reachable by external A2A clients.
+{{- end }}

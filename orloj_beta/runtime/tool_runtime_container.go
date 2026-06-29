@@ -1,0 +1,631 @@
+package agentruntime
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+
+	"github.com/OrlojHQ/orloj/resources"
+)
+
+// ContainerToolRuntimeConfig defines isolated tool execution in a locked-down container.
+type ContainerToolRuntimeConfig struct {
+	RuntimeBinary string
+	Image         string
+	Network       string
+	Memory        string
+	CPUs          string
+	PidsLimit     int
+	User          string
+	Shell         string
+}
+
+var ErrToolSecretResolution = errors.New("tool secret resolution failed")
+
+// SecretResolver resolves tool auth secret references.
+type SecretResolver interface {
+	Resolve(ctx context.Context, secretRef string) (string, error)
+}
+
+// EnvSecretResolver resolves secret refs from worker environment variables.
+type EnvSecretResolver struct {
+	Prefix string
+}
+
+func NewEnvSecretResolver(prefix string) *EnvSecretResolver {
+	return &EnvSecretResolver{Prefix: prefix}
+}
+
+func (r *EnvSecretResolver) WithNamespace(_ string) SecretResolver {
+	return r
+}
+
+func (r *EnvSecretResolver) Resolve(_ context.Context, secretRef string) (string, error) {
+	secretRef = strings.TrimSpace(secretRef)
+	if secretRef == "" {
+		return "", fmt.Errorf("secretRef is required")
+	}
+	keys := make([]string, 0, 3)
+	keys = append(keys, secretRef)
+	normalized := normalizeEnvKey(secretRef)
+	if normalized != "" && !strings.EqualFold(normalized, secretRef) {
+		keys = append(keys, normalized)
+	}
+	prefix := strings.TrimSpace(r.Prefix)
+	if prefix != "" && normalized != "" {
+		keys = append(keys, prefix+normalized)
+	}
+	for _, key := range dedupeStrings(keys) {
+		if value, ok := os.LookupEnv(key); ok {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return "", fmt.Errorf("secret %q resolved from env var %q but value is empty", secretRef, key)
+			}
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("%w: secret %q not found in environment", ErrToolSecretNotFound, secretRef)
+}
+
+func DefaultContainerToolRuntimeConfig() ContainerToolRuntimeConfig {
+	return ContainerToolRuntimeConfig{
+		RuntimeBinary: "docker",
+		Image:         "curlimages/curl:8.8.0",
+		Network:       "none",
+		Memory:        "128m",
+		CPUs:          "0.50",
+		PidsLimit:     64,
+		User:          "65532:65532",
+		Shell:         "/bin/sh",
+	}
+}
+
+// SandboxedContainerDefaults returns secure-by-default container settings
+// for tools running in sandboxed isolation mode. These enforce:
+//   - network=none (no network access)
+//   - memory=128m (128 MB ceiling)
+//   - cpus=0.50 (half a core)
+//   - pids_limit=64 (process limit)
+//   - user=65532:65532 (non-root nobody user)
+//
+// These defaults match DefaultContainerToolRuntimeConfig but are preserved
+// as an explicit contract so callers can distinguish between default and
+// sandboxed modes.
+func SandboxedContainerDefaults() ContainerToolRuntimeConfig {
+	return DefaultContainerToolRuntimeConfig()
+}
+
+func (c ContainerToolRuntimeConfig) normalized() ContainerToolRuntimeConfig {
+	out := c
+	defaults := DefaultContainerToolRuntimeConfig()
+	if strings.TrimSpace(out.RuntimeBinary) == "" {
+		out.RuntimeBinary = defaults.RuntimeBinary
+	}
+	if strings.TrimSpace(out.Image) == "" {
+		out.Image = defaults.Image
+	}
+	if strings.TrimSpace(out.Network) == "" {
+		out.Network = defaults.Network
+	}
+	if strings.TrimSpace(out.Memory) == "" {
+		out.Memory = defaults.Memory
+	}
+	if strings.TrimSpace(out.CPUs) == "" {
+		out.CPUs = defaults.CPUs
+	}
+	if out.PidsLimit <= 0 {
+		out.PidsLimit = defaults.PidsLimit
+	}
+	if strings.TrimSpace(out.User) == "" {
+		out.User = defaults.User
+	}
+	if strings.TrimSpace(out.Shell) == "" {
+		out.Shell = defaults.Shell
+	}
+	return out
+}
+
+// ContainerCommandRunner executes container runtime commands.
+type ContainerCommandRunner interface {
+	Run(ctx context.Context, binary string, args []string, stdin string, env map[string]string) (stdout string, stderr string, err error)
+}
+
+type osExecContainerCommandRunner struct{}
+
+func (r *osExecContainerCommandRunner) Run(ctx context.Context, binary string, args []string, stdin string, env map[string]string) (string, string, error) {
+	cmd := exec.CommandContext(ctx, binary, args...) //nolint:gosec
+	cmd.Stdin = strings.NewReader(stdin)
+	stdout := NewBoundedWriter(DefaultMaxToolOutputBytes)
+	stderr := NewBoundedWriter(DefaultMaxToolOutputBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), mapToEnv(env)...)
+	}
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+// ContainerToolRuntime executes tools inside a containerized sandbox.
+type ContainerToolRuntime struct {
+	registry     ToolCapabilityRegistry
+	secrets      SecretResolver
+	authInjector *AuthInjector
+	runner       ContainerCommandRunner
+	config       ContainerToolRuntimeConfig
+	namespace    string
+}
+
+func NewContainerToolRuntime(registry ToolCapabilityRegistry, config ContainerToolRuntimeConfig) *ContainerToolRuntime {
+	return NewContainerToolRuntimeWithRunnerAndSecrets(
+		registry,
+		config,
+		&osExecContainerCommandRunner{},
+		NewEnvSecretResolver("ORLOJ_SECRET_"),
+	)
+}
+
+func NewContainerToolRuntimeWithRunner(
+	registry ToolCapabilityRegistry,
+	config ContainerToolRuntimeConfig,
+	runner ContainerCommandRunner,
+) *ContainerToolRuntime {
+	return NewContainerToolRuntimeWithRunnerAndSecrets(
+		registry,
+		config,
+		runner,
+		NewEnvSecretResolver("ORLOJ_SECRET_"),
+	)
+}
+
+func NewContainerToolRuntimeWithRunnerAndSecrets(
+	registry ToolCapabilityRegistry,
+	config ContainerToolRuntimeConfig,
+	runner ContainerCommandRunner,
+	secrets SecretResolver,
+) *ContainerToolRuntime {
+	if runner == nil {
+		runner = &osExecContainerCommandRunner{}
+	}
+	if secrets == nil {
+		secrets = NewEnvSecretResolver("ORLOJ_SECRET_")
+	}
+	return &ContainerToolRuntime{
+		registry:     registry,
+		secrets:      secrets,
+		authInjector: NewAuthInjector(secrets, nil),
+		runner:       runner,
+		config:       config.normalized(),
+	}
+}
+
+func (r *ContainerToolRuntime) WithRegistry(registry ToolCapabilityRegistry) ToolRuntime {
+	if r == nil {
+		return NewContainerToolRuntime(registry, DefaultContainerToolRuntimeConfig())
+	}
+	return &ContainerToolRuntime{
+		registry:     registry,
+		secrets:      r.secrets,
+		authInjector: r.authInjector,
+		runner:       r.runner,
+		config:       r.config,
+		namespace:    r.namespace,
+	}
+}
+
+func (r *ContainerToolRuntime) WithNamespace(namespace string) ToolRuntime {
+	if r == nil {
+		return NewContainerToolRuntime(nil, DefaultContainerToolRuntimeConfig())
+	}
+	copy := *r
+	copy.namespace = resources.NormalizeNamespace(strings.TrimSpace(namespace))
+	if aware, ok := copy.secrets.(namespaceAwareSecretResolver); ok {
+		copy.secrets = aware.WithNamespace(copy.namespace)
+	}
+	copy.authInjector = NewAuthInjector(copy.secrets, nil)
+	return &copy
+}
+
+func (r *ContainerToolRuntime) Call(ctx context.Context, tool string, input string) (string, error) {
+	tool = strings.TrimSpace(tool)
+	if tool == "" {
+		return "", NewToolError(
+			ToolStatusError,
+			ToolCodeInvalidInput,
+			ToolReasonInvalidInput,
+			false,
+			"missing tool name",
+			ErrInvalidToolRuntimePolicy,
+			map[string]string{"field": "tool"},
+		)
+	}
+	if r.registry == nil {
+		return "", NewToolError(
+			ToolStatusError,
+			ToolCodeRuntimePolicyInvalid,
+			ToolReasonRuntimePolicyInvalid,
+			false,
+			"missing tool registry for isolated runtime",
+			ErrInvalidToolRuntimePolicy,
+			map[string]string{"tool": tool},
+		)
+	}
+	spec, ok := r.registry.Resolve(tool)
+	if !ok {
+		return "", NewToolError(
+			ToolStatusError,
+			ToolCodeUnsupportedTool,
+			ToolReasonToolUnsupported,
+			false,
+			fmt.Sprintf("unsupported tool %s", tool),
+			ErrUnsupportedTool,
+			map[string]string{"tool": tool},
+		)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(spec.Type)) {
+	case "", "http":
+		return r.callHTTP(ctx, tool, spec, input)
+	case "cli":
+		return r.callCLI(ctx, tool, spec, input)
+	default:
+		return "", NewToolError(
+			ToolStatusError,
+			ToolCodeUnsupportedTool,
+			ToolReasonToolUnsupported,
+			false,
+			fmt.Sprintf("tool=%s type=%s unsupported by container isolation path", tool, spec.Type),
+			ErrUnsupportedTool,
+			map[string]string{
+				"tool": tool,
+				"type": strings.TrimSpace(spec.Type),
+			},
+		)
+	}
+}
+
+func (r *ContainerToolRuntime) callHTTP(ctx context.Context, tool string, spec resources.ToolSpec, input string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", mapContainerContextError(tool, err)
+	}
+	endpoint := strings.TrimSpace(spec.Endpoint)
+	if endpoint == "" {
+		return "", NewToolError(
+			ToolStatusError,
+			ToolCodeRuntimePolicyInvalid,
+			ToolReasonRuntimePolicyInvalid,
+			false,
+			fmt.Sprintf("tool=%s missing endpoint", tool),
+			ErrInvalidToolRuntimePolicy,
+			map[string]string{"tool": tool},
+		)
+	}
+	if err := ValidateEndpointURL(endpoint, false); err != nil {
+		return "", NewToolError(
+			ToolStatusError,
+			ToolCodeRuntimePolicyInvalid,
+			ToolReasonRuntimePolicyInvalid,
+			false,
+			fmt.Sprintf("tool=%s container endpoint blocked: %s", tool, err),
+			err,
+			map[string]string{"tool": tool},
+		)
+	}
+
+	containerEnv := map[string]string{}
+	hasAuth := false
+	if r.authInjector != nil {
+		authResult, authErr := r.authInjector.Resolve(ctx, tool, spec.Auth)
+		if authErr != nil {
+			return "", authErr
+		}
+		for k, v := range authResult.EnvVars {
+			containerEnv[k] = v
+			hasAuth = true
+		}
+	}
+	args := r.containerRunArgs(endpoint, hasAuth)
+	stdout, stderr, err := runContainerCommandBounded(ctx, r.runner, r.config.RuntimeBinary, args, input, containerEnv)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return "", mapContainerContextError(tool, err)
+		}
+		return "", NewToolError(
+			ToolStatusError,
+			ToolCodeExecutionFailed,
+			ToolReasonBackendFailure,
+			true,
+			fmt.Sprintf("container sandbox execution failed for tool=%s stderr=%s", tool, RedactSensitive(compactStderr(stderr))),
+			err,
+			map[string]string{
+				"tool":           tool,
+				"runtime":        strings.TrimSpace(r.config.RuntimeBinary),
+				"isolation_mode": "container",
+			},
+		)
+	}
+	return strings.TrimSpace(stdout), nil
+}
+
+func (r *ContainerToolRuntime) callCLI(ctx context.Context, tool string, spec resources.ToolSpec, input string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", mapContainerContextError(tool, err)
+	}
+	command := strings.TrimSpace(spec.Cli.Command)
+	if command == "" {
+		return "", NewToolError(ToolStatusError, ToolCodeRuntimePolicyInvalid, ToolReasonRuntimePolicyInvalid, false,
+			fmt.Sprintf("tool=%s missing cli.command", tool), ErrInvalidToolRuntimePolicy, map[string]string{"tool": tool})
+	}
+	image := strings.TrimSpace(spec.Cli.Image)
+	if image == "" {
+		return "", NewToolError(ToolStatusError, ToolCodeRuntimePolicyInvalid, ToolReasonRuntimePolicyInvalid, false,
+			fmt.Sprintf("tool=%s missing cli.image for container isolation", tool), ErrInvalidToolRuntimePolicy, map[string]string{"tool": tool})
+	}
+
+	var creds *registryCredentials
+	if pullSecret := strings.TrimSpace(spec.Cli.ImagePullSecret); pullSecret != "" {
+		var resolveErr error
+		creds, resolveErr = resolveRegistryAuth(ctx, r.secrets, pullSecret)
+		if resolveErr != nil {
+			return "", NewToolError(ToolStatusError, ToolCodeExecutionFailed, ToolReasonBackendFailure, false,
+				fmt.Sprintf("tool=%s failed to resolve image_pull_secret %q: %v", tool, pullSecret, resolveErr),
+				fmt.Errorf("%w: %v", ErrToolSecretResolution, resolveErr),
+				map[string]string{"tool": tool, "image_pull_secret": pullSecret})
+		}
+		defer creds.Cleanup()
+
+		pullEnv := map[string]string{"DOCKER_CONFIG": creds.configDir}
+		pullArgs := []string{"pull", "--quiet", image}
+		_, pullStderr, pullErr := runContainerCommandBounded(ctx, r.runner, r.config.RuntimeBinary, pullArgs, "", pullEnv)
+		if pullErr != nil {
+			return "", NewToolError(ToolStatusError, ToolCodeExecutionFailed, ToolReasonBackendFailure, true,
+				fmt.Sprintf("tool=%s image pull failed for %s: %s", tool, image, RedactSensitive(compactStderr(pullStderr))),
+				pullErr, map[string]string{"tool": tool, "image": image})
+		}
+	}
+
+	args, err := evaluateCLIArgs(spec.Cli.Args, input)
+	if err != nil {
+		return "", err
+	}
+
+	containerEnv := make(map[string]string)
+	for k, v := range spec.Cli.Env {
+		containerEnv[k] = v
+	}
+	for _, ref := range spec.Cli.EnvFrom {
+		secretRef := ref.SecretRef
+		if ref.Key != "" {
+			secretRef = secretRef + ":" + ref.Key
+		}
+		value, resolveErr := r.secrets.Resolve(ctx, secretRef)
+		if resolveErr != nil {
+			return "", NewToolError(ToolStatusError, ToolCodeExecutionFailed, ToolReasonBackendFailure, false,
+				fmt.Sprintf("failed to resolve secret for env var %s: %v", ref.Name, resolveErr),
+				fmt.Errorf("%w: %v", ErrToolSecretResolution, resolveErr),
+				map[string]string{"env_var": ref.Name, "secretRef": ref.SecretRef})
+		}
+		containerEnv[ref.Name] = value
+	}
+
+	dockerArgs := r.containerCLIRunArgs(spec.Cli, image, command, args, containerEnv)
+
+	stdinData := ""
+	if spec.Cli.StdinFromInput {
+		stdinData = strings.TrimSpace(input)
+	}
+
+	var runEnv map[string]string
+	if creds != nil {
+		runEnv = map[string]string{"DOCKER_CONFIG": creds.configDir}
+	}
+	stdout, stderr, runErr := runContainerCommandBounded(ctx, r.runner, r.config.RuntimeBinary, dockerArgs, stdinData, runEnv)
+	if runErr != nil {
+		if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
+			return "", mapContainerContextError(tool, runErr)
+		}
+		return "", NewToolError(ToolStatusError, ToolCodeExecutionFailed, ToolReasonBackendFailure, true,
+			fmt.Sprintf("container CLI execution failed for tool=%s stderr=%s", tool, RedactSensitive(compactStderr(stderr))),
+			runErr, map[string]string{"tool": tool, "runtime": strings.TrimSpace(r.config.RuntimeBinary), "isolation_mode": "container"})
+	}
+
+	return formatCLIOutput(spec.Cli.Output, stdout, stderr), nil
+}
+
+func (r *ContainerToolRuntime) containerCLIRunArgs(cli resources.ToolCliSpec, image string, command string, args []string, env map[string]string) []string {
+	network := strings.TrimSpace(cli.Network)
+	if network == "" {
+		network = strings.TrimSpace(r.config.Network)
+	}
+	dockerArgs := []string{
+		"run", "--rm", "-i",
+		"--network", network,
+	}
+	if strings.TrimSpace(r.config.User) != "" {
+		dockerArgs = append(dockerArgs, "--user", strings.TrimSpace(r.config.User))
+	}
+	memory := strings.TrimSpace(cli.Resources.Memory)
+	if memory == "" {
+		memory = strings.TrimSpace(r.config.Memory)
+	}
+	if memory != "" {
+		dockerArgs = append(dockerArgs, "--memory", memory)
+	}
+	cpus := strings.TrimSpace(cli.Resources.CPUs)
+	if cpus == "" {
+		cpus = strings.TrimSpace(r.config.CPUs)
+	}
+	if cpus != "" {
+		dockerArgs = append(dockerArgs, "--cpus", cpus)
+	}
+	pidsLimit := cli.Resources.PidsLimit
+	if pidsLimit <= 0 {
+		pidsLimit = r.config.PidsLimit
+	}
+	if pidsLimit > 0 {
+		dockerArgs = append(dockerArgs, "--pids-limit", strconv.Itoa(pidsLimit))
+	}
+	if strings.TrimSpace(cli.WorkingDir) != "" {
+		dockerArgs = append(dockerArgs, "--workdir", strings.TrimSpace(cli.WorkingDir))
+	}
+	for k, v := range env {
+		dockerArgs = append(dockerArgs, "-e", k+"="+v)
+	}
+	dockerArgs = append(dockerArgs, "--entrypoint", command, image)
+	dockerArgs = append(dockerArgs, args...)
+	return dockerArgs
+}
+
+func runContainerCommandBounded(
+	ctx context.Context,
+	runner ContainerCommandRunner,
+	binary string,
+	args []string,
+	stdin string,
+	env map[string]string,
+) (string, string, error) {
+	if runner == nil {
+		return "", "", fmt.Errorf("missing container command runner")
+	}
+	return runner.Run(ctx, binary, args, stdin, env)
+}
+
+func mapContainerContextError(tool string, err error) error {
+	tool = strings.TrimSpace(tool)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return NewToolError(
+			ToolStatusError,
+			ToolCodeTimeout,
+			ToolReasonExecutionTimeout,
+			true,
+			fmt.Sprintf("container tool execution timed out for tool=%s", tool),
+			err,
+			map[string]string{
+				"tool":           tool,
+				"isolation_mode": "container",
+			},
+		)
+	case errors.Is(err, context.Canceled):
+		return NewToolError(
+			ToolStatusError,
+			ToolCodeCanceled,
+			ToolReasonExecutionCanceled,
+			false,
+			fmt.Sprintf("container tool execution canceled for tool=%s", tool),
+			err,
+			map[string]string{
+				"tool":           tool,
+				"isolation_mode": "container",
+			},
+		)
+	default:
+		return err
+	}
+}
+
+func (r *ContainerToolRuntime) containerRunArgs(endpoint string, includeAuth bool) []string {
+	args := []string{
+		"run", "--rm", "-i",
+		"--network", strings.TrimSpace(r.config.Network),
+	}
+	if strings.TrimSpace(r.config.User) != "" {
+		args = append(args, "--user", strings.TrimSpace(r.config.User))
+	}
+	if strings.TrimSpace(r.config.Memory) != "" {
+		args = append(args, "--memory", strings.TrimSpace(r.config.Memory))
+	}
+	if strings.TrimSpace(r.config.CPUs) != "" {
+		args = append(args, "--cpus", strings.TrimSpace(r.config.CPUs))
+	}
+	if r.config.PidsLimit > 0 {
+		args = append(args, "--pids-limit", strconv.Itoa(r.config.PidsLimit))
+	}
+	if includeAuth {
+		args = append(args,
+			"--env", "TOOL_AUTH_BEARER",
+			"--env", "TOOL_AUTH_BASIC",
+			"--env", "TOOL_AUTH_HEADER_NAME",
+			"--env", "TOOL_AUTH_HEADER_VALUE",
+		)
+	}
+	args = append(
+		args,
+		"-e", "TOOL_ENDPOINT="+endpoint,
+		"--entrypoint", strings.TrimSpace(r.config.Shell),
+		strings.TrimSpace(r.config.Image),
+		"-lc",
+		`if [ -n "$TOOL_AUTH_BEARER" ]; then HEADER="Authorization: Bearer $TOOL_AUTH_BEARER"; cat | curl -sS --fail-with-body -X POST -H "$HEADER" --data-binary @- "$TOOL_ENDPOINT"; elif [ -n "$TOOL_AUTH_BASIC" ]; then HEADER="Authorization: Basic $TOOL_AUTH_BASIC"; cat | curl -sS --fail-with-body -X POST -H "$HEADER" --data-binary @- "$TOOL_ENDPOINT"; elif [ -n "$TOOL_AUTH_HEADER_NAME" ]; then HEADER="$TOOL_AUTH_HEADER_NAME: $TOOL_AUTH_HEADER_VALUE"; cat | curl -sS --fail-with-body -X POST -H "$HEADER" --data-binary @- "$TOOL_ENDPOINT"; else cat | curl -sS --fail-with-body -X POST --data-binary @- "$TOOL_ENDPOINT"; fi`,
+	)
+	return args
+}
+
+func compactStderr(stderr string) string {
+	value := strings.TrimSpace(stderr)
+	if len(value) <= 400 {
+		return value
+	}
+	return value[:400]
+}
+
+func mapToEnv(values map[string]string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for key, value := range values {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		out = append(out, key+"="+value)
+	}
+	return out
+}
+
+func normalizeEnvKey(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var builder strings.Builder
+	builder.Grow(len(raw))
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+		switch {
+		case ch >= 'a' && ch <= 'z':
+			builder.WriteByte(ch - ('a' - 'A'))
+		case ch >= 'A' && ch <= 'Z':
+			builder.WriteByte(ch)
+		case ch >= '0' && ch <= '9':
+			builder.WriteByte(ch)
+		default:
+			builder.WriteByte('_')
+		}
+	}
+	return builder.String()
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
