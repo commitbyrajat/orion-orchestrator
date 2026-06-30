@@ -1,0 +1,8 @@
+apiVersion: orloj.dev/v1
+kind: Secret
+metadata:
+  name: openai-api-key
+  namespace: orloj
+spec:
+  data:
+    api-key: "API_KEY"

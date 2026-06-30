@@ -275,7 +275,129 @@ orloj.local
 Test the ingress route:
 
 ```bash
-curl -i http://orloj.local
+export orloj_url="http://orloj.local"
+export ORLOJ_API_TOKEN="orloj-api-token-change-me"
+export ORLOJ_SETUP_TOKEN="orloj-setup-token-change-me"
+
+curl -i "$orloj_url"
+```
+
+#### Configure First Admin Credentials With Curl
+
+Use `/v1/auth/setup` to configure the admin username and password the first
+time Orloj starts with native auth. The chart values used above enable native
+auth and set `auth.setupToken`; replace the default setup token in
+`v1-values.yaml` before using this outside a local test cluster.
+
+First, confirm that native auth is enabled and first-user setup is still
+required:
+
+```bash
+curl -i "$orloj_url/v1/auth/config"
+```
+
+Expected first-time setup response:
+
+```json
+{
+  "mode": "native",
+  "setup_required": true,
+  "setup_token_required": true,
+  "login_methods": ["password"]
+}
+```
+
+Create the initial admin user. This exact example configures username `admin`
+with password `admin-password-change-me` using the sample setup token from
+`v1-values.yaml`. Change these values before using the command outside a local
+test cluster. This is accepted only while `setup_required` is `true`; the
+password must be at least 12 characters, and `setup_token` must match the
+configured `auth.setupToken` value.
+
+```bash
+curl -i -c /tmp/orloj-cookie.jar \
+  -X POST "$orloj_url/v1/auth/setup" \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"username\": \"admin\",
+    \"password\": \"admin-password-change-me\",
+    \"setup_token\": \"$ORLOJ_SETUP_TOKEN\"
+  }"
+```
+
+Expected status: `201 Created`.
+
+The setup response creates a session and writes it to `/tmp/orloj-cookie.jar`.
+To verify the credentials from a fresh session, log in with the admin username
+and password:
+
+```bash
+rm -f /tmp/orloj-cookie.jar
+
+curl -i -c /tmp/orloj-cookie.jar \
+  -X POST "$orloj_url/v1/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "username": "admin",
+    "password": "admin-password-change-me"
+  }'
+```
+
+Expected status: `200 OK`.
+
+If `/v1/auth/config` returns `"setup_required": false`, the first admin user has
+already been configured. Use the password reset flow instead of calling
+`/v1/auth/setup` again.
+
+Update the admin password:
+
+```bash
+curl -i -b /tmp/orloj-cookie.jar -c /tmp/orloj-cookie.jar \
+  -X POST "$orloj_url/v1/auth/change-password" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "current_password": "replace-with-strong-password",
+    "new_password": "replace-with-new-strong-password"
+  }'
+```
+
+The password update clears existing sessions. Log in again with the new
+password before making more admin-only API calls.
+
+To change the admin username later, create a replacement admin user, set its
+password, and delete the old user. The API does not rename existing users.
+
+```bash
+curl -i \
+  -X POST "$orloj_url/v1/auth/users" \
+  -H "Authorization: Bearer $ORLOJ_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "username": "new-admin",
+    "role": "admin"
+  }'
+```
+
+The create-user response includes a generated password once. To set a specific
+password for the replacement admin:
+
+```bash
+curl -i \
+  -X POST "$orloj_url/v1/auth/admin/reset-password" \
+  -H "Authorization: Bearer $ORLOJ_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "username": "new-admin",
+    "new_password": "replace-with-new-admin-password"
+  }'
+```
+
+After confirming the replacement admin can log in, delete the old admin user:
+
+```bash
+curl -i \
+  -X DELETE "$orloj_url/v1/auth/users/admin" \
+  -H "Authorization: Bearer $ORLOJ_API_TOKEN"
 ```
 
 ### 6. Verify External Dependency Values
