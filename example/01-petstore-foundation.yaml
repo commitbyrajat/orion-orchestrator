@@ -120,7 +120,7 @@ metadata:
   namespace: orloj
 spec:
   data:
-    api-key: "c2stcHJvai00Z2VQN1ZudEZWZjdPeUNRNDhuNUttUHExemVVNXZzMVFyNEdNbjNNVW1LZDV0Vzlhak96aWFma3drVWZzRHRreGJhUVB2YXhHV1QzQmxia0ZKem5LaGRrOS1CX3JUbVNWb2Jxcl8xTzFSeGhnR1pScnpJMXhESXZpSHhtODRzd1NvVEJxQ1dJM1h4YmNsVE9YZXJ5ZldRd3I2OEEK"
+    api-key: "<API_KEY>"
 ---
 apiVersion: orloj.dev/v1
 kind: ModelEndpoint
